@@ -2,8 +2,7 @@ import time
 import sys
 import threading
 import pyttsx3
-import pygame
-import numpy as np
+import winsound
 from config import SCAN_WINDOW_TIMEOUT, POST_SELECTION_RESET, TTS_VOICE_RATE, HARDWARE_DEBOUNCE
 
 # --- INTERFACE GRID SPECS (CSGF) ---
@@ -23,7 +22,6 @@ HIRAGANA_MATRIX = {
 
 class WindowsAudioEngine:
     def __init__(self):
-        pygame.mixer.init(frequency=44100, size=-16, channels=2)
         self.running = True
         self.input_triggered = threading.Event()
         self.composed_sentence = []
@@ -36,33 +34,20 @@ class WindowsAudioEngine:
 
         self._build_sounds()
 
-    def _make_tone(self, freq_sequence, duration_each=0.09, fade=True, volume=0.5):
-        """Synthesizes a short tone (or sequence of tones) as a pygame Sound, no audio files needed."""
-        sample_rate = 44100
-        segments = []
+    def _play_chime(self, freq_sequence, duration_each_ms=90):
+        """Plays a short beep or sequence of beeps using Windows' built-in sound module.
+        No installed library needed — winsound ships with every Windows Python install."""
         for freq in freq_sequence:
-            n_samples = int(sample_rate * duration_each)
-            t = np.linspace(0, duration_each, n_samples, False)
-            wave = np.sin(freq * t * 2 * np.pi)
-            if fade:
-                fade_len = max(1, int(n_samples * 0.15))
-                envelope = np.ones(n_samples)
-                envelope[:fade_len] = np.linspace(0, 1, fade_len)
-                envelope[-fade_len:] = np.linspace(1, 0, fade_len)
-                wave *= envelope
-            segments.append(wave)
-        full_wave = np.concatenate(segments) * volume
-        audio = np.int16(full_wave * 32767)
-        stereo = np.column_stack([audio, audio])
-        return pygame.sndarray.make_sound(np.ascontiguousarray(stereo))
+            winsound.Beep(int(freq), int(duration_each_ms))
 
     def _build_sounds(self):
-        """Pre-builds every non-verbal confirmation cue used across the auditory loop."""
-        self.snd_confirm = self._make_tone([880], duration_each=0.10)          # sharp selection lock chime
-        self.snd_back = self._make_tone([600, 400], duration_each=0.09)        # distinct 前 reverse-nav chime
-        self.snd_bell = self._make_tone([1046, 1318], duration_each=0.22, fade=True)  # boxing-bell "TING!"
-        self.snd_sleep = self._make_tone([700, 500, 300], duration_each=0.15)  # fading chime into sleep mode
-        self.snd_wake = self._make_tone([500, 900], duration_each=0.12)        # wake-up chime
+        """Defines every non-verbal confirmation cue used across the auditory loop, as
+        (frequencies, duration_ms) pairs — played on demand via _play_chime."""
+        self.snd_confirm = ([880], 100)          # sharp selection lock chime
+        self.snd_back = ([600, 400], 90)         # distinct 前 reverse-nav chime
+        self.snd_bell = ([1046, 1318], 220)      # boxing-bell "TING!"
+        self.snd_sleep = ([700, 500, 300], 150)  # fading chime into sleep mode
+        self.snd_wake = ([500, 900], 120)        # wake-up chime
 
     def setup_masculine_voice(self):
         """Picks the first available Japanese voice. No longer requires Ichiro specifically —
@@ -99,7 +84,7 @@ class WindowsAudioEngine:
     def speak_interruptible(self, text, is_bell=False):
         self.input_triggered.clear()
         if is_bell:
-            self.snd_bell.play()  # Menu row: silent "TING!" bell only, per spec — no spoken word
+            self._play_chime(*self.snd_bell)  # Menu row: silent "TING!" bell only, per spec — no spoken word
         else:
             self.tts.say(text)
             self.tts.runAndWait()
@@ -109,9 +94,9 @@ class WindowsAudioEngine:
             if self.input_triggered.is_set():
                 # Instant non-verbal lock confirmation, before any spoken feedback
                 if text == "前":
-                    self.snd_back.play()
+                    self._play_chime(*self.snd_back)
                 else:
-                    self.snd_confirm.play()
+                    self._play_chime(*self.snd_confirm)
                 return True
             time.sleep(0.02)
         return False
@@ -151,10 +136,10 @@ class WindowsAudioEngine:
     def execute_sleep_sequence(self):
         self.sleep_mode = True
         self.input_triggered.clear()
-        self.snd_sleep.play()
+        self._play_chime(*self.snd_sleep)
         while self.sleep_mode and self.running:
             if self.input_triggered.is_set():
-                self.snd_wake.play()
+                self._play_chime(*self.snd_wake)
                 self.tts.say("再開します")
                 self.tts.runAndWait()
                 self.sleep_mode = False
