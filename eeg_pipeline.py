@@ -1,7 +1,6 @@
 import time
 import sys
 import threading
-import numpy as np
 from config import MI_POWER_THRESHOLD, MI_LATERALIZATION_DELTA, MI_SAMPLING_WINDOW_SEC, MI_REFRACTORY_SEC
 
 try:
@@ -60,6 +59,8 @@ class BrainFlowEEGPipeline:
         if not self.board:
             self._run_zero_library_simulation()
             return
+
+        import numpy as np  # only needed here — MI mode is the only path that uses it
 
         try:
             sampling_rate = BoardShim.get_sampling_rate(self.board_id)
