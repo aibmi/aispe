@@ -22,6 +22,8 @@ class IntegratedBMISystem:
         self.monitor.showFullScreen()
 
         self.audio_engine = WindowsAudioEngine()
+        self.audio_engine.on_sentence_change = self.monitor.signal_update_text.emit
+        self.audio_engine.on_focus_update = lambda row, opt: self.monitor.signal_update_focus.emit(row, opt)
 
         # Only build the driver for the mode actually in use.
         # This is what keeps a disconnected PS switch from raising a false
@@ -36,9 +38,11 @@ class IntegratedBMISystem:
             self.mi_driver = BrainFlowEEGPipeline(use_synthetic=True)
             self.mi_driver.on_disconnect = self._handle_active_driver_disconnect
         elif self.input_mode == "TEST":
-            # No real switch present, so no real disconnect is possible —
+            # force_simulation=True: never touch a real serial port, even if the
+            # PC happens to have some other COM port available. No real switch
+            # exists in this mode, so no real disconnect is possible either —
             # on_disconnect is deliberately left unset here.
-            self.ps_driver = PacificSupplyDriver(key_bind="space")
+            self.ps_driver = PacificSupplyDriver(key_bind="space", force_simulation=True)
         else:
             raise ValueError(f"Unknown INPUT_MODE: {self.input_mode!r} (expected 'PS', 'MI', or 'TEST')")
 

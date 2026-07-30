@@ -25,10 +25,11 @@ class WindowsAudioEngine:
         self.running = True
         self.input_triggered = threading.Event()
         self.composed_sentence = []
+        self.on_sentence_change = None   # optional callable(full_text: str)
+        self.on_focus_update = None      # optional callable(row_name: str, current_option: str)
         self.sleep_mode = False
 
-        self.tts = pyttsx3.init('sapi5')
-        self.setup_masculine_voice()
+        self.tts = None  # created in start_engine(), on the thread that will actually use it
 
         self.row_keys = list(HIRAGANA_MATRIX.keys())
 
@@ -130,6 +131,9 @@ class WindowsAudioEngine:
         else:
             self.composed_sentence.append(choice)
 
+        if self.on_sentence_change:
+            self.on_sentence_change("".join(self.composed_sentence))
+
         time.sleep(POST_SELECTION_RESET)
         return 0
 
@@ -147,10 +151,23 @@ class WindowsAudioEngine:
             time.sleep(0.05)
 
     def start_engine(self):
+        # Must happen here, not in __init__: SAPI5 needs the speech engine created
+        # on the same thread that calls .say()/.runAndWait(), or it silently
+        # produces no audio instead of raising an error.
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except Exception:
+            pass  # pythoncom isn't always needed depending on the pyttsx3 driver in use
+        self.tts = pyttsx3.init('sapi5')
+        self.setup_masculine_voice()
+
         row_idx = 0
         while self.running:
             current_row_name = self.row_keys[row_idx]
             is_menu_bell = (current_row_name == "メニュー行")
+            if self.on_focus_update:
+                self.on_focus_update(current_row_name, "")
             hit = self.speak_interruptible(current_row_name, is_bell=is_menu_bell)
             if not self.running:
                 break
@@ -158,6 +175,8 @@ class WindowsAudioEngine:
                 tier_selection = None
                 while tier_selection is None and self.running:
                     for char_opt in HIRAGANA_MATRIX[current_row_name]:
+                        if self.on_focus_update:
+                            self.on_focus_update(current_row_name, char_opt)
                         char_hit = self.speak_interruptible(char_opt)
                         if not self.running:
                             break

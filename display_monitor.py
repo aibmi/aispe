@@ -78,7 +78,7 @@ class DisplayMonitor(QMainWindow):
         lbl_output_title.setFont(QFont("MS Gothic", 16, QFont.Weight.Bold))
         lbl_output_title.setStyleSheet("color: #555555;")
 
-        self.lbl_sentence_output = QLabel("ありがとう")
+        self.lbl_sentence_output = QLabel("")
         self.lbl_sentence_output.setFont(QFont("MS Gothic", 110, QFont.Weight.Bold))
         self.lbl_sentence_output.setStyleSheet(f"color: {COLOR_TEXT_STANDARD};")
         self.lbl_sentence_output.setWordWrap(True)
@@ -161,6 +161,12 @@ class DisplayMonitor(QMainWindow):
                 self.signal_flash_trigger.emit()
                 time.sleep(0.4)
             time.sleep(0.01)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+        else:
+            super().keyPressEvent(event)
 
     def closeEvent(self, event):
         self.running = False

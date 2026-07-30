@@ -18,11 +18,12 @@ except ImportError:
 
 
 class PacificSupplyDriver:
-    def __init__(self, key_bind="space", baud_rate=9600):
+    def __init__(self, key_bind="space", baud_rate=9600, force_simulation=False):
         self.running = True
         self.serial_conn = None
         self.baud_rate = baud_rate
         self.key_bind = key_bind
+        self.force_simulation = force_simulation
         self.hardware_pulse_event = threading.Event()
         self.connection_lost = threading.Event()
         self.on_disconnect = None  # optional callable(reason: str), set by whoever owns the caregiver display
@@ -39,6 +40,9 @@ class PacificSupplyDriver:
         return None
 
     def initialize_switch_connection(self):
+        if self.force_simulation:
+            return False  # TEST mode: never touch real hardware, always use the keyboard
+
         target_port = self.auto_detect_usb_port()
         if target_port:
             try:
