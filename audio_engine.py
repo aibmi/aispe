@@ -29,7 +29,8 @@ class WindowsAudioEngine:
         self.on_focus_update = None      # optional callable(row_name: str, current_option: str)
         self.sleep_mode = False
 
-        self.tts = None  # created in start_engine(), on the thread that will actually use it
+        self._voice_id = None    # resolved once at startup, reused for every phrase
+        self._voice_name = None
 
         self.row_keys = list(HIRAGANA_MATRIX.keys())
 
@@ -51,23 +52,39 @@ class WindowsAudioEngine:
         self.snd_wake = ([500, 900], 120)        # wake-up chime
 
     def setup_masculine_voice(self):
-        """Picks the first available Japanese voice. No longer requires Ichiro specifically —
-        any installed Japanese voice (e.g. Haruka) works fine for this system."""
-        voices = self.tts.getProperty('voices')
-        selected_voice = None
-        selected_name = None
+        """Resolves which Japanese voice to use, once, and caches its id. No longer requires
+        Ichiro specifically — any installed Japanese voice (e.g. Haruka) works fine."""
+        probe_engine = pyttsx3.init('sapi5')
+        voices = probe_engine.getProperty('voices')
         for v in voices:
             if "japanese" in v.name.lower() or "ja-jp" in str(getattr(v, "id", "")).lower():
-                selected_voice = v.id
-                selected_name = v.name
+                self._voice_id = v.id
+                self._voice_name = v.name
                 break
-        if selected_voice:
-            self.tts.setProperty('voice', selected_voice)
-            print(f"🔊 [VOICE]: Using '{selected_name}' for Japanese speech output.")
+        probe_engine.stop()
+        del probe_engine
+
+        if self._voice_id:
+            print(f"🔊 [VOICE]: Using '{self._voice_name}' for Japanese speech output.")
         else:
             print("⚠️ [VOICE]: No Japanese voice found — falling back to the system default. "
                   "Add a Japanese voice via Settings > Time & Language > Speech if output sounds wrong.")
-        self.tts.setProperty('rate', TTS_VOICE_RATE)
+
+    def _speak(self, text):
+        """Speaks one phrase using a brand-new engine each time. SAPI5 via pyttsx3 is known to
+        speak once and then silently hang on later calls if the same engine object is reused —
+        creating a fresh one per phrase avoids that entirely."""
+        engine = pyttsx3.init('sapi5')
+        if self._voice_id:
+            engine.setProperty('voice', self._voice_id)
+        engine.setProperty('rate', TTS_VOICE_RATE)
+        engine.say(text)
+        engine.runAndWait()
+        try:
+            engine.stop()
+        except Exception:
+            pass
+        del engine
 
     def listen_for_keyboard_simulation(self):
         print("\n[AUDIO ENGINE SIMULATION INTERFACE ACTIVE]")
@@ -82,13 +99,12 @@ class WindowsAudioEngine:
                 self.input_triggered.set()
             time.sleep(0.01)
 
-    def speak_interruptible(self, text, is_bell=False):
+    def speak_interruptible(self, text, is_bell=False, spoken_text=None):
         self.input_triggered.clear()
         if is_bell:
             self._play_chime(*self.snd_bell)  # Menu row: silent "TING!" bell only, per spec — no spoken word
         else:
-            self.tts.say(text)
-            self.tts.runAndWait()
+            self._speak(spoken_text if spoken_text is not None else text)
 
         start_time = time.time()
         while time.time() - start_time < SCAN_WINDOW_TIMEOUT:
@@ -107,20 +123,17 @@ class WindowsAudioEngine:
             return current_row_idx
 
         if choice == "前":
-            self.tts.say("前")
-            self.tts.runAndWait()
+            self._speak("前")
             new_idx = (current_row_idx - 1) % len(self.row_keys)
             return new_idx
 
-        self.tts.say(choice)
-        self.tts.runAndWait()
+        self._speak(choice)
 
         if choice == "スペース":
             self.composed_sentence.append(" ")
         elif choice == "読み上げ":
             full_text = "".join(self.composed_sentence)
-            self.tts.say(full_text if full_text else "空欄")
-            self.tts.runAndWait()
+            self._speak(full_text if full_text else "空欄")
         elif choice == "一文字消去":
             if self.composed_sentence:
                 self.composed_sentence.pop()
@@ -144,22 +157,27 @@ class WindowsAudioEngine:
         while self.sleep_mode and self.running:
             if self.input_triggered.is_set():
                 self._play_chime(*self.snd_wake)
-                self.tts.say("再開します")
-                self.tts.runAndWait()
+                self._speak("再開します")
                 self.sleep_mode = False
                 self.input_triggered.clear()
             time.sleep(0.05)
 
+    def _row_reading(self, row_name):
+        """The kanji 行 has several valid readings (ぎょう/こう/etc.) and the TTS engine
+        guesses inconsistently. Spell out the intended one explicitly for speech only —
+        the on-screen text keeps showing '行' as written."""
+        if row_name.endswith("行"):
+            return row_name[:-1] + "ぎょう"
+        return row_name
+
     def start_engine(self):
-        # Must happen here, not in __init__: SAPI5 needs the speech engine created
-        # on the same thread that calls .say()/.runAndWait(), or it silently
-        # produces no audio instead of raising an error.
+        # Resolve which voice to use once, on the thread that will actually speak
+        # (every phrase gets its own fresh engine — see _speak()).
         try:
             import pythoncom
             pythoncom.CoInitialize()
         except Exception:
             pass  # pythoncom isn't always needed depending on the pyttsx3 driver in use
-        self.tts = pyttsx3.init('sapi5')
         self.setup_masculine_voice()
 
         row_idx = 0
@@ -168,7 +186,8 @@ class WindowsAudioEngine:
             is_menu_bell = (current_row_name == "メニュー行")
             if self.on_focus_update:
                 self.on_focus_update(current_row_name, "")
-            hit = self.speak_interruptible(current_row_name, is_bell=is_menu_bell)
+            hit = self.speak_interruptible(current_row_name, is_bell=is_menu_bell,
+                                            spoken_text=self._row_reading(current_row_name))
             if not self.running:
                 break
             if hit:

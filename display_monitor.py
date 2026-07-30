@@ -113,6 +113,18 @@ class DisplayMonitor(QMainWindow):
 
     @pyqtSlot(str)
     def update_sentence_slot(self, text_string):
+        # Longer sentences shrink to fit and wrap onto more lines, instead of
+        # running off the bottom of the screen at a fixed huge size.
+        length = len(text_string)
+        if length <= 8:
+            size = 110
+        elif length <= 16:
+            size = 80
+        elif length <= 28:
+            size = 60
+        else:
+            size = 44
+        self.lbl_sentence_output.setFont(QFont("MS Gothic", size, QFont.Weight.Bold))
         self.lbl_sentence_output.setText(text_string)
 
     @pyqtSlot(str, str)

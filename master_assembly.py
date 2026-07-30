@@ -42,7 +42,7 @@ class IntegratedBMISystem:
             # PC happens to have some other COM port available. No real switch
             # exists in this mode, so no real disconnect is possible either —
             # on_disconnect is deliberately left unset here.
-            self.ps_driver = PacificSupplyDriver(key_bind="space", force_simulation=True)
+            self.ps_driver = PacificSupplyDriver(key_bind="enter", force_simulation=True)
         else:
             raise ValueError(f"Unknown INPUT_MODE: {self.input_mode!r} (expected 'PS', 'MI', or 'TEST')")
 
@@ -78,7 +78,7 @@ class IntegratedBMISystem:
             self.monitor.lbl_mode.setText("LIVE MODE: MOTOR IMAGERY (MI)")
             self.mi_driver.start_pipeline()
         else:  # TEST
-            self.monitor.lbl_mode.setText("TEST MODE — PRESS SPACE (NO HARDWARE ATTACHED)")
+            self.monitor.lbl_mode.setText("TEST MODE — PRESS ENTER (NO HARDWARE ATTACHED)")
             self.ps_driver.start_driver()
 
         self._bridge_active_driver_to_engine()

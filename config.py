@@ -4,7 +4,7 @@
 # file picks up the new value.
 
 # --- Timing ---
-SCAN_WINDOW_TIMEOUT = 2.0     # seconds the voice waits after speaking an option
+SCAN_WINDOW_TIMEOUT = 3.0     # seconds the voice waits after speaking an option
 POST_SELECTION_RESET = 1.0    # seconds of pause before scanning restarts at あ行
 HARDWARE_DEBOUNCE = 0.4       # seconds to ignore repeat clicks/twitches after one hit
 
