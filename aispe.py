@@ -32,14 +32,21 @@ from PyQt6.QtTextToSpeech import QTextToSpeech
 from mi_detector import SyntheticEEGSource, MIDetector
 from emg_detector import SyntheticEMGSource, EMGDetector
 
-# Set to True to drive input via the synthetic MI detector instead of Enter.
-# Real hardware isn't connected yet — this runs against fake signal data,
-# same detection logic that will be used once the EEG headband arrives.
-USE_MI_INPUT = True
+# Which input mode starts active. Switch anytime while running — no code
+# edits needed — with these keys:
+#   M = Motor Imagery (brain)      E = EMG (muscle)
+#   P = Physical Switch            S = Space test mode
+# Only one mode drives selections at a time; the others keep listening in
+# the background so switching is instant, but only the active one can
+# actually trigger a selection.
+DEFAULT_MODE = "S"
 
-# Same idea, for the EMG (muscle) trigger — independent toggle, can run
-# alongside MI or on its own. Also synthetic until real hardware arrives.
-USE_EMG_INPUT = True
+MODE_LABELS = {
+    "M": "Motor Imagery (brain)",
+    "E": "EMG (muscle)",
+    "P": "Physical Switch",
+    "S": "Space test mode",
+}
 
 SCAN_WINDOW_TIMEOUT_MS = 3000
 POST_SELECTION_RESET_MS = 1000
@@ -59,36 +66,66 @@ HIRAGANA_MATRIX = {
 }
 
 
+# --- Visual style ---
+# A modern Japanese-compatible UI font instead of the old bitmap-style MS Gothic.
+# Qt falls back automatically if a name isn't installed, so this is safe everywhere.
+UI_FONT = "Yu Gothic UI"
+
+COLOR_BG = "#14161B"          # dark charcoal-navy instead of pure black
+COLOR_CARD_BG = "#1E212B"     # slightly lighter panel background, for visual separation
+COLOR_CARD_BORDER = "#2E323F"
+COLOR_MODE = "#7B8794"        # muted slate gray — status info, deprioritized on purpose
+COLOR_FOCUS = "#60A5FA"       # clear blue — currently-scanned item, nowhere near red
+COLOR_OUTPUT = "#EAB308"      # strong gold — the important, serious text, but not red
+COLOR_HINT = "#5C6370"        # muted gray, unobtrusive but readable
+COLOR_SLEEP = "#4B4F58"
+
+
 class AispeWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("aispe — auditory BMI communication system")
-        self.setStyleSheet("background-color: #000000;")
+        self.setStyleSheet(f"background-color: {COLOR_BG};")
         self.resize(1024, 768)
 
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(30, 30, 30, 30)
-        layout.setSpacing(20)
+        layout.setSpacing(18)
+
+        self._card_style = (
+            f"background-color: {COLOR_CARD_BG}; "
+            f"border: 1px solid {COLOR_CARD_BORDER}; "
+            "border-radius: 14px; padding: 16px;"
+        )
+        card_style = self._card_style
 
         self.lbl_mode = QLabel("")
-        self.lbl_mode.setFont(QFont("MS Gothic", 20, QFont.Weight.Bold))
-        self.lbl_mode.setStyleSheet("color: #00FF00;")
+        self.lbl_mode.setFont(QFont(UI_FONT, 20, QFont.Weight.Bold))
+        self.lbl_mode.setStyleSheet(f"color: {COLOR_MODE}; {card_style}")
 
         self.lbl_focus = QLabel(">>>> あ行 <<<<")
-        self.lbl_focus.setFont(QFont("MS Gothic", 64, QFont.Weight.Bold))
-        self.lbl_focus.setStyleSheet("color: #FFB300;")
+        self.lbl_focus.setFont(QFont(UI_FONT, 64, QFont.Weight.Bold))
+        self.lbl_focus.setStyleSheet(f"color: {COLOR_FOCUS}; {card_style}")
         self.lbl_focus.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.lbl_output = QLabel("")
-        self.lbl_output.setFont(QFont("MS Gothic", 110, QFont.Weight.Bold))
-        self.lbl_output.setStyleSheet("color: #00FF00;")
+        self.lbl_output.setFont(QFont(UI_FONT, 110, QFont.Weight.Bold))
+        self.lbl_output.setStyleSheet(f"color: {COLOR_OUTPUT}; {card_style}")
         self.lbl_output.setWordWrap(True)
+
+        self.lbl_controls = QLabel(
+            "type M for Motor Imagery - brain mode , E for EMG - muscle mode, "
+            "P for Physical Switch mode, S for Space test mode, ESC to Exit"
+        )
+        self.lbl_controls.setFont(QFont(UI_FONT, 13))
+        self.lbl_controls.setStyleSheet(f"color: {COLOR_HINT}; padding: 4px 4px;")
 
         layout.addWidget(self.lbl_mode)
         layout.addWidget(self.lbl_focus, stretch=2)
         layout.addWidget(self.lbl_output, stretch=3)
+        layout.addWidget(self.lbl_controls)
 
         # --- Speech: Qt's own tool, same thread as everything else ---
         self.tts = QTextToSpeech()
@@ -118,51 +155,61 @@ class AispeWindow(QMainWindow):
         self._pending_speech = []
         self._speech_on_done = None
 
-        # --- MI input (currently synthetic — real hardware isn't connected yet) ---
-        if USE_MI_INPUT:
-            # Much sparser than the standalone test's rate — this should feel like an
-            # occasional deliberate selection, not a constant random firehose.
-            self.mi_source = SyntheticEEGSource(event_probability=0.003)
-            self.mi_detector = MIDetector()
-            self.mi_timer = QTimer(self)
-            self.mi_timer.timeout.connect(self._poll_mi_input)
-            self.mi_timer.start(50)  # ~20 samples/sec, matching the test harness's pacing
+        # --- All input sources run continuously in the background — this is what
+        # makes switching modes with a keypress instant, with no re-initialization.
+        # Only the ACTIVE mode is allowed to actually trigger a selection. ---
+        self.active_mode = DEFAULT_MODE
 
-        # --- EMG input (also synthetic for now) ---
-        if USE_EMG_INPUT:
-            self.emg_source = SyntheticEMGSource(event_probability=0.003)
-            self.emg_detector = EMGDetector()
-            self.emg_timer = QTimer(self)
-            self.emg_timer.timeout.connect(self._poll_emg_input)
-            self.emg_timer.start(50)
+        # MI (brain) — synthetic until real EEG hardware is connected
+        self.mi_source = SyntheticEEGSource(event_probability=0.003)
+        self.mi_detector = MIDetector()
+        self.mi_timer = QTimer(self)
+        self.mi_timer.timeout.connect(self._poll_mi_input)
+        self.mi_timer.start(50)  # ~20 samples/sec, matching the test harness's pacing
 
-        self.lbl_mode.setText(self._active_mode_label())
+        # EMG (muscle) — synthetic until real hardware is connected
+        self.emg_source = SyntheticEMGSource(event_probability=0.003)
+        self.emg_detector = EMGDetector()
+        self.emg_timer = QTimer(self)
+        self.emg_timer.timeout.connect(self._poll_emg_input)
+        self.emg_timer.start(50)
+
+        # P (Physical Switch) — placeholder: bound to Enter for now, since no real
+        # switch driver is wired into aispe yet. Swap this for a real serial-port
+        # driver once the PS switch hardware is actually connected.
+
+        self.lbl_mode.setText(self._mode_label())
 
         self.begin_row_scan()
 
-    def _active_mode_label(self):
-        active = []
-        if USE_MI_INPUT:
-            active.append("MI (SYNTHETIC)")
-        if USE_EMG_INPUT:
-            active.append("EMG (SYNTHETIC)")
-        if not active:
-            return "aispe TEST MODE — PRESS ENTER"
-        return "aispe " + " + ".join(active) + " — auto-triggering"
+    def set_active_mode(self, mode_key):
+        """Switches which input source can trigger a selection. All sources keep
+        running in the background regardless — this just changes which one is
+        allowed through to handle_pulse()."""
+        if mode_key not in MODE_LABELS:
+            return
+        self.active_mode = mode_key
+        if self.sleep_mode:
+            return  # sleep-mode label stays showing the wake hint until woken
+        self.lbl_mode.setText(self._mode_label())
+
+    def _mode_label(self):
+        return f"ACTIVE MODE: {MODE_LABELS[self.active_mode]}"
 
     def _poll_mi_input(self):
-        """Pulls one synthetic C3/C4 sample and feeds it to the detector. On a real
-        trigger, calls handle_pulse() — the exact same entry point Enter uses, so
-        the scanning logic has no idea whether a press came from a key or from MI."""
+        """Pulls one synthetic C3/C4 sample and feeds it to the detector. Runs
+        regardless of the active mode, so switching to M is instant — but only
+        forwards to handle_pulse() when MI is actually the active mode."""
         c3, c4, _ = self.mi_source.next_sample()
-        if self.mi_detector.update(c3, c4):
+        triggered = self.mi_detector.update(c3, c4)
+        if triggered and self.active_mode == "M":
             self.handle_pulse()
 
     def _poll_emg_input(self):
-        """Same idea as _poll_mi_input, for the EMG channel — also feeds into
-        handle_pulse(), so the scan logic treats it identically either way."""
+        """Same idea as _poll_mi_input, for the EMG channel."""
         raw, _ = self.emg_source.next_sample()
-        if self.emg_detector.update(raw):
+        triggered = self.emg_detector.update(raw)
+        if triggered and self.active_mode == "E":
             self.handle_pulse()
 
     # --- Voice setup ---
@@ -285,13 +332,38 @@ class AispeWindow(QMainWindow):
     def keyPressEvent(self, event):
         if event.isAutoRepeat():
             return  # a held-down key shouldn't count as repeated presses
-        if event.key() == Qt.Key.Key_Escape:
+
+        key = event.key()
+
+        if key == Qt.Key.Key_Escape:
             self.close()
             return
-        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+
+        if key == Qt.Key.Key_M:
+            self.set_active_mode("M")
+            return
+        if key == Qt.Key.Key_E:
+            self.set_active_mode("E")
+            return
+        if key == Qt.Key.Key_P:
+            self.set_active_mode("P")
+            return
+        if key == Qt.Key.Key_S:
+            self.set_active_mode("S")
+            return
+
+        # S = Space test mode: only Space triggers, and only while S is active
+        if key == Qt.Key.Key_Space and self.active_mode == "S":
             self.handle_pulse()
-        else:
-            super().keyPressEvent(event)
+            return
+
+        # P = Physical Switch: placeholder bound to Enter until real switch
+        # hardware is wired in — only fires while P is active
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.active_mode == "P":
+            self.handle_pulse()
+            return
+
+        super().keyPressEvent(event)
 
     def handle_pulse(self):
         if self.sleep_mode:
@@ -354,7 +426,7 @@ class AispeWindow(QMainWindow):
         text = "".join(self.composed_sentence)
         length = len(text)
         size = 110 if length <= 8 else 80 if length <= 16 else 60 if length <= 28 else 44
-        self.lbl_output.setFont(QFont("MS Gothic", size, QFont.Weight.Bold))
+        self.lbl_output.setFont(QFont(UI_FONT, size, QFont.Weight.Bold))
         self.lbl_output.setText(text)
 
     def enter_sleep_mode(self):
@@ -362,15 +434,29 @@ class AispeWindow(QMainWindow):
         winsound.Beep(700, 150)
         winsound.Beep(500, 150)
         winsound.Beep(300, 150)
-        wake_hint = "auto-triggering will wake it" if (USE_MI_INPUT or USE_EMG_INPUT) else "press Enter to wake"
-        self.lbl_mode.setText(f"SLEEP MODE — {wake_hint}")
+        wake_hints = {"M": "imagine the trigger to wake", "E": "trigger the muscle to wake",
+                      "P": "press the switch to wake", "S": "press Space to wake"}
+        self.lbl_mode.setText(f"SLEEP MODE — {wake_hints[self.active_mode]}")
         self.lbl_focus.setText("[ AUDITORY LOOP PAUSED ]")
+
+        # Dim everything to a muted gray — visibly paused, not just different text.
+        # Output text stays frozen on screen (not cleared) but dimmed, same as the
+        # original design intent: nothing is lost, it's just not the active state.
+        self.lbl_mode.setStyleSheet(f"color: {COLOR_SLEEP}; {self._card_style}")
+        self.lbl_focus.setStyleSheet(f"color: {COLOR_SLEEP}; {self._card_style}")
+        self.lbl_output.setStyleSheet(f"color: {COLOR_SLEEP}; {self._card_style}")
 
     def wake_up(self):
         self.sleep_mode = False
         winsound.Beep(500, 120)
         winsound.Beep(900, 120)
-        self.lbl_mode.setText(self._active_mode_label())
+
+        # Restore normal colors
+        self.lbl_mode.setStyleSheet(f"color: {COLOR_MODE}; {self._card_style}")
+        self.lbl_focus.setStyleSheet(f"color: {COLOR_FOCUS}; {self._card_style}")
+        self.lbl_output.setStyleSheet(f"color: {COLOR_OUTPUT}; {self._card_style}")
+
+        self.lbl_mode.setText(self._mode_label())
         self.row_idx = 0
         self._speak_sequence(["再開します"], on_done=self.begin_row_scan)
 
