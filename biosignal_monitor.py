@@ -117,6 +117,12 @@ class ScopeWidget(QWidget):
             self._paint_emg(painter, w, h)
 
         self._draw_trigger_light(painter, w)
+        self._draw_controls_hint(painter, w, h)
+
+    def _draw_controls_hint(self, painter, w, h):
+        dim_text = QColor(90, 130, 90)
+        painter.setPen(QPen(dim_text))
+        painter.drawText(10, h - 10, "type M for MI view   E for EMG view   ESC to quit")
 
     def _draw_trace(self, painter, buf, color, y_center, y_scale, w, width_px=2):
         if len(buf) < 2:
@@ -176,7 +182,7 @@ class ScopeWidget(QWidget):
 
         cur = self.mi_index_buf[-1] if self.mi_index_buf else 0.0
         painter.setPen(QPen(COLOR_TEXT))
-        painter.drawText(10, h - 16,
+        painter.drawText(10, h - 32,
                           f"Index: {cur:+.3f}   Baseline: {baseline:+.3f}   "
                           f"Threshold: {baseline + MI_LATERALIZATION_DELTA:+.3f}")
 
@@ -199,7 +205,7 @@ class ScopeWidget(QWidget):
 
         cur_env = self.emg_detector.envelope or 0.0
         painter.setPen(QPen(COLOR_TEXT))
-        painter.drawText(10, h - 16,
+        painter.drawText(10, h - 32,
                           f"Envelope: {cur_env:5.1f}µV   Baseline: {baseline:5.1f}µV   "
                           f"Threshold: {baseline * EMG_TRIGGER_MULTIPLIER:5.1f}µV")
 
