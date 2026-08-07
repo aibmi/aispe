@@ -434,10 +434,13 @@ class AispeWindow(QMainWindow):
         winsound.Beep(700, 150)
         winsound.Beep(500, 150)
         winsound.Beep(300, 150)
-        wake_hints = {"M": "imagine the trigger to wake", "E": "trigger the muscle to wake",
-                      "P": "press the switch to wake", "S": "press Space to wake"}
-        self.lbl_mode.setText(f"SLEEP MODE — {wake_hints[self.active_mode]}")
-        self.lbl_focus.setText("[ AUDITORY LOOP PAUSED ]")
+        wake_hints = {
+            "M": "念じてください Imagine the trigger to wake",
+            "E": "筋肉を動かしてください Trigger the muscle to wake",
+            "P": "スイッチを押してください Press the switch to wake",
+            "S": "スペースキーを押してください Press Space to wake",
+        }
+        self.lbl_mode.setText(f"休止モード Sleep Mode — {wake_hints[self.active_mode]}")
 
         # Dim everything to a muted gray — visibly paused, not just different text.
         # Output text stays frozen on screen (not cleared) but dimmed, same as the
