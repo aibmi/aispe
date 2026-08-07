@@ -105,10 +105,9 @@ def run_test(num_samples=400):
     source = SyntheticEEGSource(event_probability=0.03, seed=42)
     detector = MIDetector()
 
-    true_positives = 0
     false_positives = 0
-    missed_events = 0
-    event_active = False
+    episodes = []          # each entry: {"start": i, "triggered": False}
+    in_episode = False
 
     print(f"Running {num_samples} synthetic samples through the detector...\n")
 
@@ -116,24 +115,36 @@ def run_test(num_samples=400):
         c3, c4, was_real_event = source.next_sample()
         triggered = detector.update(c3, c4, now=i * 0.05)  # simulate ~20 samples/sec
 
-        if was_real_event and not event_active:
-            event_active = True
-        if not was_real_event:
-            event_active = False
+        if was_real_event and not in_episode:
+            in_episode = True
+            episodes.append({"start": i, "triggered": False})
+        elif not was_real_event and in_episode:
+            in_episode = False
 
         if triggered:
-            if was_real_event:
-                true_positives += 1
-                print(f"  [{i:4d}] ✅ correctly triggered on a real event")
+            if in_episode:
+                episodes[-1]["triggered"] = True
+                print(f"  [{i:4d}] ✅ correctly triggered during a real event")
             else:
                 false_positives += 1
                 print(f"  [{i:4d}] ⚠️  triggered but NO real event was happening (false positive)")
 
+    total_events = len(episodes)
+    detected_events = sum(1 for e in episodes if e["triggered"])
+    missed_events = total_events - detected_events
+
+    print(f"\n--- Episode detail (for diagnosing misses) ---")
+    for idx, e in enumerate(episodes):
+        status = "✅ detected" if e["triggered"] else "❌ MISSED"
+        print(f"  Episode {idx}: started at sample {e['start']:4d}  ({status})")
+
     print(f"\n--- Results ---")
-    print(f"True positives (correct detections): {true_positives}")
-    print(f"False positives (wrong detections):  {false_positives}")
-    print("\nNote: this run doesn't separately count missed real events yet — a real")
-    print("accuracy pass would also track how many injected events produced NO trigger.")
+    print(f"Real events injected:        {total_events}")
+    print(f"Events correctly detected:   {detected_events}")
+    print(f"Events MISSED (no trigger):  {missed_events}")
+    print(f"False positives (no event):  {false_positives}")
+    if total_events:
+        print(f"\nDetection rate: {detected_events / total_events * 100:.0f}%")
 
 
 if __name__ == "__main__":
