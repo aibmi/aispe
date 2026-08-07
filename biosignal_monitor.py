@@ -24,8 +24,9 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPainter, QPen, QColor, QPainterPath, QFont
 
-from mi_detector import SyntheticEEGSource, MIDetector, MI_LATERALIZATION_DELTA
-from emg_detector import SyntheticEMGSource, EMGDetector, EMG_TRIGGER_MULTIPLIER
+from mi_detector import MIDetector, MI_LATERALIZATION_DELTA
+from emg_detector import EMGDetector, EMG_TRIGGER_MULTIPLIER
+from real_hardware_source import RealEEGSource, RealEMGSource
 
 BUFFER_LEN = 220          # points shown across the screen width (~11 sec at 50ms/sample)
 SAMPLE_INTERVAL_MS = 50   # ~20 samples/sec, matching the detectors' own pacing
@@ -49,14 +50,14 @@ class ScopeWidget(QWidget):
         self.mode = "MI"
 
         # --- MI data ---
-        self.mi_source = SyntheticEEGSource(event_probability=0.02)
+        self.mi_source = RealEEGSource()
         self.mi_detector = MIDetector()
         self.c3_buf = deque(maxlen=BUFFER_LEN)
         self.c4_buf = deque(maxlen=BUFFER_LEN)
         self.mi_index_buf = deque(maxlen=BUFFER_LEN)
 
         # --- EMG data ---
-        self.emg_source = SyntheticEMGSource(event_probability=0.02)
+        self.emg_source = RealEMGSource()
         self.emg_detector = EMGDetector()
         self.emg_raw_buf = deque(maxlen=BUFFER_LEN)
         self.emg_env_buf = deque(maxlen=BUFFER_LEN)
@@ -171,8 +172,9 @@ class ScopeWidget(QWidget):
         threshold_y = bottom_center - (baseline + MI_LATERALIZATION_DELTA) * bottom_scale
         self._draw_dashed_hline(painter, threshold_y, w)
 
+        status = "connected" if self.mi_source.is_connected else "NOT DETECTED — no headband connected"
         painter.setPen(QPen(COLOR_TEXT))
-        painter.drawText(10, 24, "aispe biosignal monitor — MI (C3 / C4)")
+        painter.drawText(10, 24, f"aispe biosignal monitor — MI (C3 / C4) — {status}")
         painter.setPen(QPen(COLOR_TRACE_A))
         painter.drawText(10, int(top_center - 60), "C3")
         painter.setPen(QPen(COLOR_TRACE_B))
@@ -196,8 +198,9 @@ class ScopeWidget(QWidget):
         threshold_y = center - (baseline * EMG_TRIGGER_MULTIPLIER) * scale
         self._draw_dashed_hline(painter, threshold_y, w)
 
+        status = "connected" if self.emg_source.is_connected else "NOT DETECTED — no headband connected"
         painter.setPen(QPen(COLOR_TEXT))
-        painter.drawText(10, 24, "aispe biosignal monitor — EMG")
+        painter.drawText(10, 24, f"aispe biosignal monitor — EMG — {status}")
         painter.setPen(QPen(COLOR_TRACE_A))
         painter.drawText(10, int(center - 80), "EMG Raw (µV)")
         painter.setPen(QPen(COLOR_TRACE_B))
