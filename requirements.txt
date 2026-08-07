@@ -1,0 +1,14 @@
+# aispe / mojiban project — all Python dependencies in one place.
+#
+# Install everything at once with:
+#   pip install -r requirements.txt
+#
+# Note: PyQt6's speech module (QtTextToSpeech) is included in most PyQt6
+# installs, but on some setups it needs its own package. If aispe.py fails
+# specifically on "from PyQt6.QtTextToSpeech import QTextToSpeech", also run:
+#   pip install PyQt6-QtTextToSpeech
+
+PyQt6
+pyserial
+brainflow
+numpy
