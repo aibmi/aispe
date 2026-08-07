@@ -29,8 +29,10 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLa
 from PyQt6.QtCore import Qt, QTimer, QLocale
 from PyQt6.QtGui import QFont
 from PyQt6.QtTextToSpeech import QTextToSpeech
-from mi_detector import SyntheticEEGSource, MIDetector
-from emg_detector import SyntheticEMGSource, EMGDetector
+from mi_detector import MIDetector
+from emg_detector import EMGDetector
+from real_hardware_source import RealEEGSource, RealEMGSource
+from ps_detector import PSSwitchSource
 
 # Which input mode starts active. Switch anytime while running — no code
 # edits needed — with these keys:
@@ -160,23 +162,32 @@ class AispeWindow(QMainWindow):
         # Only the ACTIVE mode is allowed to actually trigger a selection. ---
         self.active_mode = DEFAULT_MODE
 
-        # MI (brain) — synthetic until real EEG hardware is connected
-        self.mi_source = SyntheticEEGSource(event_probability=0.003)
+        # MI (brain) — real Ganglion connection. Reports honestly not-connected
+        # until the headband is actually plugged in; nothing to change here later.
+        self.mi_source = RealEEGSource()
         self.mi_detector = MIDetector()
         self.mi_timer = QTimer(self)
         self.mi_timer.timeout.connect(self._poll_mi_input)
-        self.mi_timer.start(50)  # ~20 samples/sec, matching the test harness's pacing
+        self.mi_timer.start(50)  # ~20 samples/sec, matching the detector's expected pacing
 
-        # EMG (muscle) — synthetic until real hardware is connected
-        self.emg_source = SyntheticEMGSource(event_probability=0.003)
+        # EMG (muscle) — shares the same physical board connection as MI above.
+        self.emg_source = RealEMGSource()
         self.emg_detector = EMGDetector()
         self.emg_timer = QTimer(self)
         self.emg_timer.timeout.connect(self._poll_emg_input)
         self.emg_timer.start(50)
 
-        # P (Physical Switch) — placeholder: bound to Enter for now, since no real
-        # switch driver is wired into aispe yet. Swap this for a real serial-port
-        # driver once the PS switch hardware is actually connected.
+        # P (Physical Switch) — real driver, auto-detects the switch over USB/serial.
+        # If it's not found (unplugged, drivers missing, pyserial not installed),
+        # this fails gracefully — Enter still works as a manual fallback below.
+        self.ps_source = PSSwitchSource()
+        self.ps_timer = QTimer(self)
+        self.ps_timer.timeout.connect(self._poll_ps_input)
+        self.ps_timer.start(50)
+        if self.ps_source.is_connected:
+            print("🔌 [P MODE]: Physical switch connected and active.")
+        else:
+            print(f"⚠️ [P MODE]: {self.ps_source.last_error} — Enter still works as a manual fallback.")
 
         self.lbl_mode.setText(self._mode_label())
 
@@ -189,12 +200,38 @@ class AispeWindow(QMainWindow):
         if mode_key not in MODE_LABELS:
             return
         self.active_mode = mode_key
+        if mode_key == "M":
+            self.mi_source.reconnect()
+            if not self.mi_source.is_connected:
+                print(f"⚠️ [M MODE]: {self.mi_source.last_error}")
+        elif mode_key == "E":
+            self.emg_source.reconnect()
+            if not self.emg_source.is_connected:
+                print(f"⚠️ [E MODE]: {self.emg_source.last_error}")
+        elif mode_key == "P":
+            # In case the switch was plugged in after the app launched —
+            # only actually does anything if it wasn't already connected.
+            self.ps_source.reconnect()
+            if self.ps_source.is_connected:
+                print("🔌 [P MODE]: Physical switch connected and active.")
+            else:
+                print(f"⚠️ [P MODE]: {self.ps_source.last_error} — Enter still works as a manual fallback.")
         if self.sleep_mode:
             return  # sleep-mode label stays showing the wake hint until woken
         self.lbl_mode.setText(self._mode_label())
 
     def _mode_label(self):
-        return f"ACTIVE MODE: {MODE_LABELS[self.active_mode]}"
+        base = f"ACTIVE MODE: {MODE_LABELS[self.active_mode]}"
+        if self.active_mode == "P":
+            status = "connected" if self.ps_source.is_connected else "NOT DETECTED — Enter works as fallback"
+            return f"{base} — {status}"
+        if self.active_mode == "M":
+            status = "connected" if self.mi_source.is_connected else "NOT DETECTED — no headband connected"
+            return f"{base} — {status}"
+        if self.active_mode == "E":
+            status = "connected" if self.emg_source.is_connected else "NOT DETECTED — no headband connected"
+            return f"{base} — {status}"
+        return base
 
     def _poll_mi_input(self):
         """Pulls one synthetic C3/C4 sample and feeds it to the detector. Runs
@@ -210,6 +247,13 @@ class AispeWindow(QMainWindow):
         raw, _ = self.emg_source.next_sample()
         triggered = self.emg_detector.update(raw)
         if triggered and self.active_mode == "E":
+            self.handle_pulse()
+
+    def _poll_ps_input(self):
+        """Polls the real physical switch. Runs regardless of active mode (so
+        switching to P is instant), but only forwards to handle_pulse() when
+        P is actually active."""
+        if self.ps_source.poll_pulse() and self.active_mode == "P":
             self.handle_pulse()
 
     # --- Voice setup ---
@@ -357,8 +401,9 @@ class AispeWindow(QMainWindow):
             self.handle_pulse()
             return
 
-        # P = Physical Switch: placeholder bound to Enter until real switch
-        # hardware is wired in — only fires while P is active
+        # P = Physical Switch: real driver polls in the background (see
+        # _poll_ps_input); Enter also works here as a manual fallback/test
+        # trigger, useful if the switch isn't detected or for quick testing
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.active_mode == "P":
             self.handle_pulse()
             return
