@@ -29,6 +29,17 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLa
 from PyQt6.QtCore import Qt, QTimer, QLocale
 from PyQt6.QtGui import QFont
 from PyQt6.QtTextToSpeech import QTextToSpeech
+from mi_detector import SyntheticEEGSource, MIDetector
+from emg_detector import SyntheticEMGSource, EMGDetector
+
+# Set to True to drive input via the synthetic MI detector instead of Enter.
+# Real hardware isn't connected yet — this runs against fake signal data,
+# same detection logic that will be used once the EEG headband arrives.
+USE_MI_INPUT = True
+
+# Same idea, for the EMG (muscle) trigger — independent toggle, can run
+# alongside MI or on its own. Also synthetic until real hardware arrives.
+USE_EMG_INPUT = True
 
 SCAN_WINDOW_TIMEOUT_MS = 3000
 POST_SELECTION_RESET_MS = 1000
@@ -48,10 +59,10 @@ HIRAGANA_MATRIX = {
 }
 
 
-class Aispe2Window(QMainWindow):
+class AispeWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("aispe2 — QTextToSpeech comparison build")
+        self.setWindowTitle("aispe — auditory BMI communication system")
         self.setStyleSheet("background-color: #000000;")
         self.resize(1024, 768)
 
@@ -61,7 +72,7 @@ class Aispe2Window(QMainWindow):
         layout.setContentsMargins(30, 30, 30, 30)
         layout.setSpacing(20)
 
-        self.lbl_mode = QLabel("aispe2 TEST MODE — PRESS ENTER")
+        self.lbl_mode = QLabel("")
         self.lbl_mode.setFont(QFont("MS Gothic", 20, QFont.Weight.Bold))
         self.lbl_mode.setStyleSheet("color: #00FF00;")
 
@@ -107,7 +118,52 @@ class Aispe2Window(QMainWindow):
         self._pending_speech = []
         self._speech_on_done = None
 
+        # --- MI input (currently synthetic — real hardware isn't connected yet) ---
+        if USE_MI_INPUT:
+            # Much sparser than the standalone test's rate — this should feel like an
+            # occasional deliberate selection, not a constant random firehose.
+            self.mi_source = SyntheticEEGSource(event_probability=0.003)
+            self.mi_detector = MIDetector()
+            self.mi_timer = QTimer(self)
+            self.mi_timer.timeout.connect(self._poll_mi_input)
+            self.mi_timer.start(50)  # ~20 samples/sec, matching the test harness's pacing
+
+        # --- EMG input (also synthetic for now) ---
+        if USE_EMG_INPUT:
+            self.emg_source = SyntheticEMGSource(event_probability=0.003)
+            self.emg_detector = EMGDetector()
+            self.emg_timer = QTimer(self)
+            self.emg_timer.timeout.connect(self._poll_emg_input)
+            self.emg_timer.start(50)
+
+        self.lbl_mode.setText(self._active_mode_label())
+
         self.begin_row_scan()
+
+    def _active_mode_label(self):
+        active = []
+        if USE_MI_INPUT:
+            active.append("MI (SYNTHETIC)")
+        if USE_EMG_INPUT:
+            active.append("EMG (SYNTHETIC)")
+        if not active:
+            return "aispe TEST MODE — PRESS ENTER"
+        return "aispe " + " + ".join(active) + " — auto-triggering"
+
+    def _poll_mi_input(self):
+        """Pulls one synthetic C3/C4 sample and feeds it to the detector. On a real
+        trigger, calls handle_pulse() — the exact same entry point Enter uses, so
+        the scanning logic has no idea whether a press came from a key or from MI."""
+        c3, c4, _ = self.mi_source.next_sample()
+        if self.mi_detector.update(c3, c4):
+            self.handle_pulse()
+
+    def _poll_emg_input(self):
+        """Same idea as _poll_mi_input, for the EMG channel — also feeds into
+        handle_pulse(), so the scan logic treats it identically either way."""
+        raw, _ = self.emg_source.next_sample()
+        if self.emg_detector.update(raw):
+            self.handle_pulse()
 
     # --- Voice setup ---
 
@@ -306,20 +362,21 @@ class Aispe2Window(QMainWindow):
         winsound.Beep(700, 150)
         winsound.Beep(500, 150)
         winsound.Beep(300, 150)
-        self.lbl_mode.setText("SLEEP MODE — press Enter to wake")
+        wake_hint = "auto-triggering will wake it" if (USE_MI_INPUT or USE_EMG_INPUT) else "press Enter to wake"
+        self.lbl_mode.setText(f"SLEEP MODE — {wake_hint}")
         self.lbl_focus.setText("[ AUDITORY LOOP PAUSED ]")
 
     def wake_up(self):
         self.sleep_mode = False
         winsound.Beep(500, 120)
         winsound.Beep(900, 120)
-        self.lbl_mode.setText("aispe2 TEST MODE — PRESS ENTER")
+        self.lbl_mode.setText(self._active_mode_label())
         self.row_idx = 0
         self._speak_sequence(["再開します"], on_done=self.begin_row_scan)
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = Aispe2Window()
+    window = AispeWindow()
     window.showFullScreen()
     sys.exit(app.exec())
